@@ -6,12 +6,153 @@ namespace esphome::qr701 {
 
 static const char *const TAG = "qr701";
 
+namespace {
+
+void write_escape(QR701 *printer, uint8_t command, uint8_t value) {
+  printer->write_byte(0x1B);
+  printer->write_byte(command);
+  printer->write_byte(value);
+}
+
+void write_italic(QR701 *printer, bool enabled) {
+  // ESC 4 enables italic and ESC 5 disables it; unlike ESC E and ESC -, these
+  // commands do not take a parameter byte.
+  printer->write_byte(0x1B);
+  printer->write_byte(enabled ? 0x34 : 0x35);
+}
+
+void write_inline_markdown(QR701 *printer, const std::string &text) {
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
+  bool code = false;
+
+  for (size_t index = 0; index < text.size();) {
+    if (text[index] == '\\' && index + 1 < text.size()) {
+      printer->write_byte(static_cast<uint8_t>(text[index + 1]));
+      index += 2;
+    } else if (index + 1 < text.size() &&
+               ((text[index] == '*' && text[index + 1] == '*') ||
+                (text[index] == '_' && text[index + 1] == '_'))) {
+      bold = !bold;
+      write_escape(printer, 0x45, bold ? 1 : 0);  // ESC E: emphasis.
+      index += 2;
+    } else if (index + 1 < text.size() && text[index] == '~' && text[index + 1] == '~') {
+      // ESC/POS has no portable strikethrough; underline is the closest
+      // broadly supported receipt-printer equivalent.
+      underline = !underline;
+      write_escape(printer, 0x2D, underline ? 1 : 0);  // ESC -: underline.
+      index += 2;
+    } else if (text[index] == '*' || text[index] == '_') {
+      italic = !italic;
+      write_italic(printer, italic);
+      index++;
+    } else if (text[index] == '`') {
+      code = !code;
+      write_escape(printer, 0x4D, code ? 1 : 0);  // ESC M: Font B / Font A.
+      index++;
+    } else if (text[index] == '[') {
+      const size_t close_label = text.find("](", index + 1);
+      const size_t close_url = close_label == std::string::npos ? std::string::npos : text.find(')', close_label + 2);
+      if (close_url != std::string::npos) {
+        write_inline_markdown(printer, text.substr(index + 1, close_label - index - 1));
+        const std::string url = text.substr(close_label + 2, close_url - close_label - 2);
+        printer->write_byte(' ');
+        printer->write_byte('(');
+        printer->write_array(reinterpret_cast<const uint8_t *>(url.data()), url.size());
+        printer->write_byte(')');
+        index = close_url + 1;
+      } else {
+        printer->write_byte(static_cast<uint8_t>(text[index++]));
+      }
+    } else {
+      printer->write_byte(static_cast<uint8_t>(text[index++]));
+    }
+  }
+
+  // Do not allow an incomplete Markdown marker to leak formatting into the
+  // following line or a later print job.
+  write_escape(printer, 0x45, 0);
+  write_italic(printer, false);
+  write_escape(printer, 0x2D, 0);
+  write_escape(printer, 0x4D, 0);
+}
+
+bool is_horizontal_rule(const std::string &line) {
+  if (line.size() < 3)
+    return false;
+  const char marker = line[0];
+  if (marker != '-' && marker != '*' && marker != '_')
+    return false;
+  for (const char character : line) {
+    if (character != marker)
+      return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 void QR701::print_text_field() {
   if (this->print_text_ == nullptr) {
     ESP_LOGW(TAG, "Print button pressed without a text entity");
     return;
   }
-  this->print(this->print_text_->state);
+  this->print_markdown(this->print_text_->state);
+}
+
+void QR701::start_markdown_print_(const std::string &markdown) {
+  size_t line_start = 0;
+  uint32_t line_count = 0;
+
+  while (line_start <= markdown.size()) {
+    const size_t line_end = markdown.find('\n', line_start);
+    std::string line = markdown.substr(line_start, line_end - line_start);
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+
+    if (is_horizontal_rule(line)) {
+      static constexpr char RULE[] = "--------------------------------";
+      this->write_array(reinterpret_cast<const uint8_t *>(RULE), sizeof(RULE) - 1);
+    } else {
+      size_t content_start = 0;
+      uint8_t heading_level = 0;
+      while (content_start < line.size() && line[content_start] == '#' && heading_level < 3) {
+        heading_level++;
+        content_start++;
+      }
+      if (heading_level > 0 && content_start < line.size() && line[content_start] == ' ') {
+        while (content_start < line.size() && line[content_start] == ' ')
+          content_start++;
+        write_escape(this, 0x61, 1);  // ESC a: centre headings.
+        write_escape(this, 0x21, heading_level == 1 ? 0x30 : 0x10);
+        write_escape(this, 0x45, 1);
+        write_inline_markdown(this, line.substr(content_start));
+        write_escape(this, 0x21, 0);
+        write_escape(this, 0x61, 0);
+      } else if (line.rfind("> ", 0) == 0) {
+        this->write_array(reinterpret_cast<const uint8_t *>("| "), 2);
+        write_inline_markdown(this, line.substr(2));
+      } else if (line.rfind("- ", 0) == 0 || line.rfind("* ", 0) == 0 || line.rfind("+ ", 0) == 0) {
+        this->write_array(reinterpret_cast<const uint8_t *>("- "), 2);
+        write_inline_markdown(this, line.substr(2));
+      } else {
+        write_inline_markdown(this, line);
+      }
+    }
+
+    this->write_byte('\n');
+    line_count++;
+    if (line_end == std::string::npos)
+      break;
+    line_start = line_end + 1;
+  }
+
+  static constexpr uint8_t FEED[] = {'\n', '\n', '\n'};
+  this->write_array(FEED, sizeof(FEED));
+  this->printing_until_ = millis() + 250 + line_count * 100;
+  this->printing_ = true;
+  this->publish_status_("printing");
 }
 
 void QR701::update() {
@@ -48,7 +189,11 @@ void QR701::loop() {
       }
       if (this->print_queued_) {
         this->print_queued_ = false;
-        this->start_print_(this->queued_text_);
+        if (this->queued_markdown_)
+          this->start_markdown_print_(this->queued_text_);
+        else
+          this->start_print_(this->queued_text_);
+        this->queued_markdown_ = false;
         this->queued_text_.clear();
       }
     }
@@ -64,7 +209,11 @@ void QR701::loop() {
     }
     if (this->print_queued_) {
       this->print_queued_ = false;
-      this->start_print_(this->queued_text_);
+      if (this->queued_markdown_)
+        this->start_markdown_print_(this->queued_text_);
+      else
+        this->start_print_(this->queued_text_);
+      this->queued_markdown_ = false;
       this->queued_text_.clear();
     }
   }

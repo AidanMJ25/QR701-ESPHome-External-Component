@@ -75,7 +75,10 @@ The component automatically creates a writable Home Assistant **Text** entity
 and a matching **Button** from its `id`. For example, `id: receipt_printer`
 creates `Receipt Printer Print Text` and `Receipt Printer Print`. Enter text
 in the field, then press the button to submit the field's entire value as one
-receipt. The draft text remains available for repeat prints or editing.
+receipt. This path renders a practical Markdown subset: headings, bold,
+italic, underline-style strikethrough, inline code, lists, block quotes,
+links, and horizontal rules. The draft text remains available for repeat
+prints or editing.
 
 ```yaml
 sequence:
@@ -122,6 +125,32 @@ The component sends printable text as supplied, then sends three LF bytes for
 line feed. The printer needs a compatible text code page for non-ASCII
 characters; ASCII is the portable choice unless the unit's manual documents a
 different code page.
+
+### Markdown receipts
+
+The Home Assistant text field is rendered as Markdown when its matching Print
+button is pressed. To render Markdown from an ESPHome automation, use
+`qr701.print_markdown`; `qr701.print_text` remains literal for backward
+compatibility.
+
+```yaml
+on_...:
+  then:
+    - qr701.print_markdown:
+        id: receipt_printer
+        text: |-
+          # Order #42
+          **Paid** · _Thank you!_
+
+          - Espresso
+          - Biscotti
+
+          [View order](https://example.com/orders/42)
+          ---
+```
+
+Markdown is intentionally text-only: images, tables, HTML, and advanced CSS
+are not rendered on this receipt printer.
 
 `qr701.feed` feeds from 0 to 255 lines using the printer's `ESC d n` command.
 `qr701.refresh_status` immediately requests a fresh set of status bytes rather

@@ -34,6 +34,7 @@ QR701 = qr701_ns.class_("QR701", cg.PollingComponent, uart.UARTDevice)
 QR701PrintText = qr701_ns.class_("QR701PrintText", text.Text)
 QR701PrintButton = qr701_ns.class_("QR701PrintButton", button.Button)
 QR701PrintAction = qr701_ns.class_("QR701PrintAction", automation.Action)
+QR701MarkdownPrintAction = qr701_ns.class_("QR701MarkdownPrintAction", automation.Action)
 QR701FeedAction = qr701_ns.class_("QR701FeedAction", automation.Action)
 QR701RefreshStatusAction = qr701_ns.class_("QR701RefreshStatusAction", automation.Action)
 
@@ -113,6 +114,20 @@ if "synchronous" in inspect.signature(automation.register_action).parameters:
     "qr701.print", QR701PrintAction, PRINT_ACTION_SCHEMA, **_register_action_kwargs
 )
 async def qr701_print_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    template_ = await cg.templatable(config[CONF_TEXT], args, cg.std_string)
+    cg.add(var.set_text(template_))
+    return var
+
+
+@automation.register_action(
+    "qr701.print_markdown",
+    QR701MarkdownPrintAction,
+    PRINT_ACTION_SCHEMA,
+    **_register_action_kwargs,
+)
+async def qr701_print_markdown_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     var = cg.new_Pvariable(action_id, template_arg, parent)
     template_ = await cg.templatable(config[CONF_TEXT], args, cg.std_string)

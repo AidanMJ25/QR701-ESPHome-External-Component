@@ -28,11 +28,23 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
     // narrow window rather than corrupting either transaction.
     if (this->awaiting_status_) {
       this->queued_text_ = text;
+      this->queued_markdown_ = false;
       this->print_queued_ = true;
       this->publish_status_("printing");
       return;
     }
     this->start_print_(text);
+  }
+
+  void print_markdown(const std::string &markdown) {
+    if (this->awaiting_status_) {
+      this->queued_text_ = markdown;
+      this->queued_markdown_ = true;
+      this->print_queued_ = true;
+      this->publish_status_("printing");
+      return;
+    }
+    this->start_markdown_print_(markdown);
   }
 
   void feed(uint8_t lines) {
@@ -84,6 +96,8 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
     this->publish_status_("printing");
   }
 
+  void start_markdown_print_(const std::string &markdown);
+
   void request_status_(uint8_t query);
   void process_status_(uint8_t status);
   void publish_binary_status_();
@@ -104,6 +118,7 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
   bool awaiting_status_{false};
   bool printing_{false};
   bool print_queued_{false};
+  bool queued_markdown_{false};
   bool feed_queued_{false};
   bool offline_{false};
   bool cover_open_{false};
@@ -138,6 +153,18 @@ template<typename... Ts> class QR701PrintAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(std::string, text)
 
   void play(const Ts &...x) override { this->parent_->print(this->text_.value(x...)); }
+
+ protected:
+  QR701 *parent_;
+};
+
+template<typename... Ts> class QR701MarkdownPrintAction : public Action<Ts...> {
+ public:
+  explicit QR701MarkdownPrintAction(QR701 *parent) : parent_(parent) {}
+
+  TEMPLATABLE_VALUE(std::string, text)
+
+  void play(const Ts &...x) override { this->parent_->print_markdown(this->text_.value(x...)); }
 
  protected:
   QR701 *parent_;
