@@ -98,6 +98,14 @@ void QR701::print_text_field() {
     ESP_LOGW(TAG, "Print button pressed without a text entity");
     return;
   }
+  this->print(this->print_text_->state);
+}
+
+void QR701::print_markdown_text_field() {
+  if (this->print_text_ == nullptr) {
+    ESP_LOGW(TAG, "Print Markdown button pressed without a text entity");
+    return;
+  }
   this->print_markdown(this->print_text_->state);
 }
 

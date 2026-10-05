@@ -72,13 +72,13 @@ and `text`. The text may contain line breaks and may be templated.
 ### Print custom text from Home Assistant
 
 The component automatically creates a writable Home Assistant **Text** entity
-and a matching **Button** from its `id`. For example, `id: receipt_printer`
-creates `Receipt Printer Print Text` and `Receipt Printer Print`. Enter text
-in the field, then press the button to submit the field's entire value as one
-receipt. This path renders a practical Markdown subset: headings, bold,
-italic, underline-style strikethrough, inline code, lists, block quotes,
-links, and horizontal rules. The draft text remains available for repeat
-prints or editing.
+and two matching **Buttons** from its `id`. For example, `id: receipt_printer`
+creates `Receipt Printer Print Text`, `Receipt Printer Print`, and `Receipt
+Printer Print Markdown`. Both buttons print the same saved text-field value:
+**Print** sends it literally, while **Print Markdown** renders a practical
+Markdown subset (headings, bold, italic, underline-style strikethrough, inline
+code, lists, block quotes, links, and horizontal rules). The draft text remains
+available for repeat prints or editing.
 
 ```yaml
 sequence:
@@ -98,8 +98,8 @@ Home Assistant assigns the actual entity ID, so use the one shown in your
 device's entity list. The text field accepts up to 1,024 characters. Newlines
 are retained; non-ASCII characters depend on the printer's ESC/POS code page.
 
-Set `print_text` or `print_button` only to override generated labels or entity
-settings:
+Set `print_text`, `print_button`, or `markdown_print_button` only to override
+generated labels or entity settings:
 
 ```yaml
 qr701:
@@ -109,6 +109,8 @@ qr701:
     name: Kitchen receipt printer
   print_button:
     name: Print kitchen receipt
+  markdown_print_button:
+    name: Print kitchen receipt as Markdown
 ```
 
 ```yaml
@@ -128,19 +130,26 @@ different code page.
 
 ### Markdown receipts
 
-The Home Assistant text field is rendered as Markdown when its matching Print
-button is pressed. To render Markdown from an ESPHome automation, use
-`qr701.print_markdown`; `qr701.print_text` remains literal for backward
-compatibility.
+The Home Assistant text field is rendered as Markdown only when its **Print
+Markdown** button is pressed. The normal **Print** button sends it literally.
+The `qr701.print_markdown` action with only an `id` does the same thing as the
+Markdown button, so it can be used in another ESPHome template button. When
+supplied with `text`, it prints that Markdown immediately. `qr701.print_text`
+remains literal for backward compatibility.
 
 ```yaml
 on_...:
   then:
+    # Print the current Home Assistant text-field draft.
+    - qr701.print_markdown:
+        id: receipt_printer
+
+    # Or print Markdown supplied directly by an automation.
     - qr701.print_markdown:
         id: receipt_printer
         text: |-
           # Order #42
-          **Paid** · _Thank you!_
+          **Paid** - _Thank you!_
 
           - Espresso
           - Biscotti

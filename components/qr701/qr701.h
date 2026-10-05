@@ -59,6 +59,7 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
 
   void refresh_status();
   void print_text_field();
+  void print_markdown_text_field();
 
   void update() override;
   void loop() override;
@@ -146,6 +147,19 @@ class QR701PrintButton : public button::Button {
   QR701 *parent_{nullptr};
 };
 
+class QR701MarkdownPrintButton : public button::Button {
+ public:
+  void set_parent(QR701 *parent) { this->parent_ = parent; }
+
+ protected:
+  void press_action() override {
+    if (this->parent_ != nullptr)
+      this->parent_->print_markdown_text_field();
+  }
+
+  QR701 *parent_{nullptr};
+};
+
 template<typename... Ts> class QR701PrintAction : public Action<Ts...> {
  public:
   explicit QR701PrintAction(QR701 *parent) : parent_(parent) {}
@@ -164,10 +178,18 @@ template<typename... Ts> class QR701MarkdownPrintAction : public Action<Ts...> {
 
   TEMPLATABLE_VALUE(std::string, text)
 
-  void play(const Ts &...x) override { this->parent_->print_markdown(this->text_.value(x...)); }
+  void set_has_text(bool has_text) { this->has_text_ = has_text; }
+
+  void play(const Ts &...x) override {
+    if (this->has_text_)
+      this->parent_->print_markdown(this->text_.value(x...));
+    else
+      this->parent_->print_markdown_text_field();
+  }
 
  protected:
   QR701 *parent_;
+  bool has_text_{false};
 };
 
 template<typename... Ts> class QR701FeedAction : public Action<Ts...> {
