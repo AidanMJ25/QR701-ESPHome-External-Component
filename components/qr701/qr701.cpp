@@ -1,5 +1,8 @@
 #include "qr701.h"
 
+#include <cctype>
+#include <vector>
+
 #include "esphome/core/log.h"
 
 namespace esphome::qr701 {
@@ -7,6 +10,154 @@ namespace esphome::qr701 {
 static const char *const TAG = "qr701";
 
 namespace {
+
+// The QR701 has a 384-dot print area. Font A is 12 dots wide, so normal text
+// fits 32 characters; the double-width H1 font fits 16. Keep these as dot
+// measurements rather than magic character counts so the printer geometry is
+// clear at each call site.
+static constexpr size_t PRINTABLE_WIDTH_DOTS = 384;
+static constexpr size_t FONT_A_WIDTH_DOTS = 12;
+static constexpr size_t NORMAL_LINE_WIDTH = PRINTABLE_WIDTH_DOTS / FONT_A_WIDTH_DOTS;
+static constexpr size_t DOUBLE_WIDTH_LINE_WIDTH = NORMAL_LINE_WIDTH / 2;
+
+void write_inline_markdown(QR701 *printer, const std::string &text);
+
+size_t markdown_width(const std::string &text) {
+  size_t width = 0;
+
+  for (size_t index = 0; index < text.size();) {
+    if (text[index] == '\\' && index + 1 < text.size()) {
+      width++;
+      index += 2;
+    } else if (index + 1 < text.size() &&
+               ((text[index] == '*' && text[index + 1] == '*') ||
+                (text[index] == '_' && text[index + 1] == '_') ||
+                (text[index] == '~' && text[index + 1] == '~'))) {
+      index += 2;
+    } else if (text[index] == '*' || text[index] == '_' || text[index] == '`') {
+      index++;
+    } else if (text[index] == '[') {
+      const size_t close_label = text.find("](", index + 1);
+      const size_t close_url = close_label == std::string::npos ? std::string::npos : text.find(')', close_label + 2);
+      if (close_url != std::string::npos) {
+        width += markdown_width(text.substr(index + 1, close_label - index - 1));
+        // The renderer prints a space and parentheses around the URL.
+        width += 3 + close_url - close_label - 2;
+        index = close_url + 1;
+      } else {
+        width++;
+        index++;
+      }
+    } else {
+      width++;
+      index++;
+    }
+  }
+
+  return width;
+}
+
+size_t text_width(const std::string &text, bool markdown) {
+  return markdown ? markdown_width(text) : text.size();
+}
+
+std::vector<std::string> wrap_line(const std::string &line, size_t max_width, bool markdown) {
+  std::vector<std::string> wrapped;
+  std::string current;
+  bool pending_space = false;
+  size_t index = 0;
+
+  while (index < line.size()) {
+    while (index < line.size() && std::isspace(static_cast<unsigned char>(line[index]))) {
+      if (!current.empty())
+        pending_space = true;
+      index++;
+    }
+    if (index == line.size())
+      break;
+    const size_t word_start = index;
+    if (markdown && line[index] == '[') {
+      // A Markdown link label may contain spaces; keep the entire link as one
+      // wrap candidate so the inline renderer still recognizes it.
+      const size_t close_label = line.find("](", index + 1);
+      const size_t close_url = close_label == std::string::npos ? std::string::npos : line.find(')', close_label + 2);
+      if (close_url != std::string::npos)
+        index = close_url + 1;
+    }
+    if (index == word_start) {
+      while (index < line.size() && !std::isspace(static_cast<unsigned char>(line[index])))
+        index++;
+    }
+    if (word_start == index)
+      continue;
+
+    const std::string word = line.substr(word_start, index - word_start);
+    const size_t word_width = text_width(word, markdown);
+    const size_t separator_width = pending_space && !current.empty() ? 1 : 0;
+    if (!current.empty() && text_width(current, markdown) + separator_width + word_width <= max_width) {
+      if (separator_width != 0)
+        current += ' ';
+      current += word;
+      pending_space = false;
+      continue;
+    }
+
+    if (!current.empty()) {
+      wrapped.push_back(current);
+      current.clear();
+    }
+    pending_space = false;
+
+    if (word_width <= max_width) {
+      current = word;
+      continue;
+    }
+
+    // There is no word boundary available. Split conservatively by source
+    // bytes so a word (or a long URL) cannot overflow the receipt width.
+    // Markdown punctuation can only reduce the rendered width, so this is safe.
+    for (size_t offset = 0; offset < word.size(); offset += max_width)
+      wrapped.push_back(word.substr(offset, max_width));
+  }
+
+  if (!current.empty())
+    wrapped.push_back(current);
+  return wrapped;
+}
+
+uint32_t write_wrapped_text(QR701 *printer, const std::string &text, size_t max_width, bool markdown) {
+  if (text.empty())
+    return 0;
+
+  uint32_t line_count = 0;
+  size_t line_start = 0;
+  while (line_start < text.size()) {
+    const size_t line_end = text.find('\n', line_start);
+    std::string line = text.substr(line_start, line_end - line_start);
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+
+    const std::vector<std::string> lines = wrap_line(line, max_width, markdown);
+    if (lines.empty()) {
+      printer->write_byte('\n');
+      line_count++;
+    } else {
+      for (const std::string &wrapped_line : lines) {
+        if (markdown)
+          write_inline_markdown(printer, wrapped_line);
+        else
+          printer->write_array(reinterpret_cast<const uint8_t *>(wrapped_line.data()), wrapped_line.size());
+        printer->write_byte('\n');
+        line_count++;
+      }
+    }
+
+    if (line_end == std::string::npos)
+      break;
+    line_start = line_end + 1;
+  }
+  return line_count;
+}
 
 void write_escape(QR701 *printer, uint8_t command, uint8_t value) {
   printer->write_byte(0x1B);
@@ -109,11 +260,32 @@ void QR701::print_markdown_text_field() {
   this->print_markdown(this->print_text_->state);
 }
 
+void QR701::start_print_(const std::string &text) {
+  const uint32_t line_count = write_wrapped_text(this, text, NORMAL_LINE_WIDTH, false);
+
+  // Terminate the final text line and advance the receipt far enough to tear.
+  static constexpr uint8_t FEED[] = {'\n', '\n', '\n'};
+  this->write_array(FEED, sizeof(FEED));
+
+  // ESC/POS status has no portable "mechanism currently printing" bit.
+  // Keep a local state briefly, then verify the printer's fault state.
+  this->printing_until_ = millis() + 250 + (line_count == 0 ? 1 : line_count) * 100;
+  this->printing_ = true;
+  this->publish_status_("printing");
+}
+
 void QR701::start_markdown_print_(const std::string &markdown) {
   size_t line_start = 0;
   uint32_t line_count = 0;
 
-  while (line_start <= markdown.size()) {
+  // An empty Markdown document still prints one blank line, matching the
+  // component's previous behaviour.
+  if (markdown.empty()) {
+    this->write_byte('\n');
+    line_count++;
+  }
+
+  while (line_start < markdown.size()) {
     const size_t line_end = markdown.find('\n', line_start);
     std::string line = markdown.substr(line_start, line_end - line_start);
     if (!line.empty() && line.back() == '\r')
@@ -122,6 +294,8 @@ void QR701::start_markdown_print_(const std::string &markdown) {
     if (is_horizontal_rule(line)) {
       static constexpr char RULE[] = "--------------------------------";
       this->write_array(reinterpret_cast<const uint8_t *>(RULE), sizeof(RULE) - 1);
+      this->write_byte('\n');
+      line_count++;
     } else {
       size_t content_start = 0;
       uint8_t heading_level = 0;
@@ -132,25 +306,48 @@ void QR701::start_markdown_print_(const std::string &markdown) {
       if (heading_level > 0 && content_start < line.size() && line[content_start] == ' ') {
         while (content_start < line.size() && line[content_start] == ' ')
           content_start++;
-        write_escape(this, 0x61, 1);  // ESC a: centre headings.
-        write_escape(this, 0x21, heading_level == 1 ? 0x30 : 0x10);
-        write_escape(this, 0x45, 1);
-        write_inline_markdown(this, line.substr(content_start));
-        write_escape(this, 0x21, 0);
-        write_escape(this, 0x61, 0);
+        const size_t heading_width = heading_level == 1 ? DOUBLE_WIDTH_LINE_WIDTH : NORMAL_LINE_WIDTH;
+        const std::vector<std::string> lines = wrap_line(line.substr(content_start), heading_width, true);
+        for (const std::string &wrapped_line : lines) {
+          write_escape(this, 0x61, 1);  // ESC a: centre headings.
+          write_escape(this, 0x21, heading_level == 1 ? 0x30 : 0x10);
+          write_escape(this, 0x45, 1);
+          write_inline_markdown(this, wrapped_line);
+          write_escape(this, 0x21, 0);
+          write_escape(this, 0x61, 0);
+          this->write_byte('\n');
+          line_count++;
+        }
       } else if (line.rfind("> ", 0) == 0) {
-        this->write_array(reinterpret_cast<const uint8_t *>("| "), 2);
-        write_inline_markdown(this, line.substr(2));
+        const std::vector<std::string> lines = wrap_line(line.substr(2), NORMAL_LINE_WIDTH - 2, true);
+        for (const std::string &wrapped_line : lines) {
+          this->write_array(reinterpret_cast<const uint8_t *>("| "), 2);
+          write_inline_markdown(this, wrapped_line);
+          this->write_byte('\n');
+          line_count++;
+        }
       } else if (line.rfind("- ", 0) == 0 || line.rfind("* ", 0) == 0 || line.rfind("+ ", 0) == 0) {
-        this->write_array(reinterpret_cast<const uint8_t *>("- "), 2);
-        write_inline_markdown(this, line.substr(2));
+        const std::vector<std::string> lines = wrap_line(line.substr(2), NORMAL_LINE_WIDTH - 2, true);
+        for (const std::string &wrapped_line : lines) {
+          this->write_array(reinterpret_cast<const uint8_t *>("- "), 2);
+          write_inline_markdown(this, wrapped_line);
+          this->write_byte('\n');
+          line_count++;
+        }
       } else {
-        write_inline_markdown(this, line);
+        const std::vector<std::string> lines = wrap_line(line, NORMAL_LINE_WIDTH, true);
+        if (lines.empty()) {
+          this->write_byte('\n');
+          line_count++;
+        } else {
+          for (const std::string &wrapped_line : lines) {
+            write_inline_markdown(this, wrapped_line);
+            this->write_byte('\n');
+            line_count++;
+          }
+        }
       }
     }
-
-    this->write_byte('\n');
-    line_count++;
     if (line_end == std::string::npos)
       break;
     line_start = line_end + 1;

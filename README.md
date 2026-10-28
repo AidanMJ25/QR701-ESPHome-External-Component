@@ -66,7 +66,10 @@ block in [example.yaml](example.yaml).
 ## Print and feed actions
 
 `qr701.print_text` takes either a text value directly or an object with `id`
-and `text`. The text may contain line breaks and may be templated.
+and `text`. The text may contain line breaks and may be templated. It wraps at
+word boundaries to the QR701's 384-dot print width (32 characters in its
+standard 12-dot font). Explicit newlines are kept. A word longer than the
+printable width is split so it cannot run off the paper.
 `qr701.print` remains a compatible alias.
 
 ### Print custom text from Home Assistant
@@ -123,8 +126,8 @@ on_...:
           Thank you!
 ```
 
-The component sends printable text as supplied, then sends three LF bytes for
-line feed. The printer needs a compatible text code page for non-ASCII
+The component wraps printable text before sending it, then sends three LF bytes
+for line feed. The printer needs a compatible text code page for non-ASCII
 characters; ASCII is the portable choice unless the unit's manual documents a
 different code page.
 
@@ -159,7 +162,12 @@ on_...:
 ```
 
 Markdown is intentionally text-only: images, tables, HTML, and advanced CSS
-are not rendered on this receipt printer.
+are not rendered on this receipt printer. Markdown paragraphs, lists, and
+quotes wrap at word boundaries while keeping their prefixes. H1 headings use
+the printer's double-width font, so they wrap at 16 characters; H2 and H3 use
+normal width with double height and retain the normal 32-character width.
+Long unbroken words and URLs are split only when necessary to stay within the
+384-dot print area.
 
 `qr701.feed` feeds from 0 to 255 lines using the printer's `ESC d n` command.
 `qr701.refresh_status` immediately requests a fresh set of status bytes rather

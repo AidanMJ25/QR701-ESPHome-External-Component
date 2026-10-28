@@ -66,26 +66,7 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
   void dump_config() override;
 
  protected:
-  void start_print_(const std::string &text) {
-    // ESC/POS-compatible printers accept printable bytes directly. Use the
-    // string length rather than write_str() so embedded newlines are retained.
-    this->write_array(reinterpret_cast<const uint8_t *>(text.data()), text.size());
-
-    // Terminate the final text line and advance the receipt far enough to tear.
-    static constexpr uint8_t FEED[] = {'\n', '\n', '\n'};
-    this->write_array(FEED, sizeof(FEED));
-
-    // ESC/POS status has no portable "mechanism currently printing" bit.
-    // Keep a local state briefly, then verify the printer's fault state.
-    uint32_t line_count = 1;
-    for (const char character : text) {
-      if (character == '\n')
-        line_count++;
-    }
-    this->printing_until_ = millis() + 250 + line_count * 100;
-    this->printing_ = true;
-    this->publish_status_("printing");
-  }
+  void start_print_(const std::string &text);
 
   void start_feed_(uint8_t lines) {
     // ESC d n: print the current line and feed n lines.
