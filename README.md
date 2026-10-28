@@ -14,7 +14,8 @@ board's GPIO, 3.3 V rail, VIN, or 5 V pin.
 
 Confirm the TTL signal voltage in the printer documentation before connecting
 it to a 3.3 V ESP. If the printer's TX output is 5 V, do not connect it to an
-ESP RX pin without level shifting. This component only transmits text, so the
+ESP RX pin without level shifting. This component can transmit text and ESC/POS
+print commands, so the
 safe minimal wiring is ESP TX → printer RX plus common ground; omit `rx_pin`
 and leave the printer TX wire disconnected. If the printer does not accept the
 ESP's 3.3 V TX signal, use an appropriate unidirectional level shifter.
@@ -63,7 +64,7 @@ qr701:
 For local development, replace the Git source with the `external_components`
 block in [example.yaml](example.yaml).
 
-## Print and feed actions
+## Print, QR, barcode, and feed actions
 
 `qr701.print_text` takes either a text value directly or an object with `id`
 and `text`. The text may contain line breaks and may be templated. It wraps at
@@ -183,6 +184,69 @@ on_...:
         id: receipt_printer
 ```
 
+### QR codes
+
+`qr701.print_qr` uses the printer's native ESC/POS QR-code generator (the
+`GS ( k` command family). It selects QR Model 2, stores the supplied text in
+the printer, prints it centered, and feeds three lines. The action accepts 1
+to 7,092 bytes. `size` is the QR module width from 1 to 16 (default `5`) and
+`error_correction` is `L`, `M`, `Q`, or `H` (default `M`). Larger module sizes
+are easier to scan but may not fit 58 mm paper for long URLs.
+
+```yaml
+on_...:
+  then:
+    - qr701.print_qr:
+        id: receipt_printer
+        text: "https://blog.aidanmaurinjones.com"
+        size: 5
+        error_correction: M
+```
+
+The component also creates `QR Data` and `Print QR` Home Assistant entities
+from its id. Set the text entity to a URL or other payload, then press the
+button; it uses `size: 5` and `error_correction: M`. Set `qr_data` or
+`print_qr_button` under `qr701:` to override their generated labels or entity
+settings.
+
+### Barcodes
+
+`qr701.print_barcode` uses ESC/POS `GS k`. Its default is centered Code 128
+with HRI text printed below the bars. Supported format names are `UPC_A`,
+`UPC_E`, `EAN13`, `EAN8`, `CODE39`, `ITF`, `CODABAR`, `CODE93`, and `CODE128`.
+For Code 128, ordinary text is automatically encoded using Code Set B; pass a
+value beginning with `{A`, `{B`, or `{C` to select a code set yourself.
+
+```yaml
+on_...:
+  then:
+    - qr701.print_barcode:
+        id: receipt_printer
+        text: "123456789012"
+        format: CODE128
+        height: 80
+        width: 2
+        show_text: true
+```
+
+`height` ranges from 1 to 255 dots and `width` from 2 to 6. Barcode data is
+limited to 252 bytes. The automatically created `Barcode Data` and `Print
+Barcode` entities use `CODE128`, height `80`, width `2`, and visible HRI text;
+use the action when a different format or appearance is needed. Set
+`barcode_data` or `print_barcode_button` under `qr701:` to override their
+generated labels or entity settings.
+
+### Firmware compatibility
+
+QR and barcode output requires the printer firmware to implement these native
+ESC/POS commands. The QR701 advertises ESC/POS compatibility, but low-cost
+printer revisions sometimes implement text commands only. Start with a short
+Code 128 value and a short QR URL. If the printer feeds blank paper, garbles
+the command, or ignores it, that firmware does not support the corresponding
+native feature. This component does not yet rasterize QR codes as a fallback;
+that would need a separately verified graphics-command path for the specific
+printer revision.
+
 ## First test
 
 First power the printer by itself and verify the feed button works. Then wire
@@ -214,6 +278,6 @@ automatic cutter, so this component deliberately has no `cut` action.
 
 ## Notes
 
-This component intentionally does not reset the printer, cut paper, or set
-formatting. Those commands vary between firmware variants, while the
-text-printing and real-time status paths remain simple and safe.
+This component intentionally does not reset the printer or cut paper. Those
+commands vary between firmware variants; QR and barcode commands are standard
+ESC/POS extensions but still require firmware support as described above.

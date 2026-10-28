@@ -47,3 +47,21 @@ button:
       - qr701.print_text: |-
           Hello from ESPHome!
           This is a test receipt.
+  - platform: template
+    name: Print QR701 QR test
+    on_press:
+      - qr701.print_qr:
+          id: receipt_printer
+          text: "https://example.com"
+          size: 5
+          error_correction: M
+  - platform: template
+    name: Print QR701 barcode test
+    on_press:
+      - qr701.print_barcode:
+          id: receipt_printer
+          text: "123456789012"
+          format: CODE128
+          height: 80
+          width: 2
+          show_text: true

@@ -260,6 +260,25 @@ void QR701::print_markdown_text_field() {
   this->print_markdown(this->print_text_->state);
 }
 
+void QR701::print_qr_data_field() {
+  if (this->qr_data_ == nullptr) {
+    ESP_LOGW(TAG, "Print QR button pressed without a QR data entity");
+    return;
+  }
+  // The button's defaults deliberately produce a medium-density QR code that
+  // remains readable on 58 mm paper. Use qr701.print_qr to tune these values.
+  this->print_qr(this->qr_data_->state, 5, 49);  // 49 = ESC/POS error correction M.
+}
+
+void QR701::print_barcode_data_field() {
+  if (this->barcode_data_ == nullptr) {
+    ESP_LOGW(TAG, "Print Barcode button pressed without a barcode data entity");
+    return;
+  }
+  // Code 128 is the most flexible widely supported ESC/POS barcode type.
+  this->print_barcode(this->barcode_data_->state, 73, 80, 2, true);
+}
+
 void QR701::start_print_(const std::string &text) {
   const uint32_t line_count = write_wrapped_text(this, text, NORMAL_LINE_WIDTH, false);
 
@@ -272,6 +291,152 @@ void QR701::start_print_(const std::string &text) {
   this->printing_until_ = millis() + 250 + (line_count == 0 ? 1 : line_count) * 100;
   this->printing_ = true;
   this->publish_status_("printing");
+}
+
+void QR701::start_qr_print_(const std::string &text, uint8_t size, uint8_t error_correction) {
+  // ESC/POS QR commands use GS ( k. Model 2 is broadly supported by modern
+  // thermal printers; its command data length includes cn, fn, and m/data.
+  if (text.empty() || text.size() > 7092) {
+    ESP_LOGW(TAG, "QR data must contain 1 to 7092 bytes; refusing to print %u bytes",
+             static_cast<unsigned>(text.size()));
+    this->publish_status_("error");
+    return;
+  }
+  if (size < 1 || size > 16 || error_correction < 48 || error_correction > 51) {
+    ESP_LOGW(TAG, "Invalid QR options (size=%u, error correction=%u)", size, error_correction);
+    this->publish_status_("error");
+    return;
+  }
+
+  auto write_qr_command = [this](uint16_t length, uint8_t cn, uint8_t fn, uint8_t parameter) {
+    this->write_byte(0x1D);  // GS
+    this->write_byte(0x28);  // (
+    this->write_byte(0x6B);  // k
+    this->write_byte(length & 0xFF);
+    this->write_byte(length >> 8);
+    this->write_byte(cn);
+    this->write_byte(fn);
+    this->write_byte(parameter);
+  };
+
+  this->write_byte(0x1D);                          // GS ( k: select QR Model 2.
+  this->write_byte(0x28);
+  this->write_byte(0x6B);
+  this->write_byte(4);
+  this->write_byte(0);
+  this->write_byte(49);
+  this->write_byte(65);
+  this->write_byte(50);
+  this->write_byte(0);
+  write_qr_command(3, 49, 67, size);               // Set module size.
+  write_qr_command(3, 49, 69, error_correction);   // Set error correction.
+  const uint16_t store_length = static_cast<uint16_t>(text.size() + 3);
+  this->write_byte(0x1D);
+  this->write_byte(0x28);
+  this->write_byte(0x6B);
+  this->write_byte(store_length & 0xFF);
+  this->write_byte(store_length >> 8);
+  this->write_byte(49);
+  this->write_byte(80);
+  this->write_byte(48);
+  this->write_array(reinterpret_cast<const uint8_t *>(text.data()), text.size());
+  write_qr_command(3, 49, 81, 48);  // Print the stored symbol.
+
+  static constexpr uint8_t FEED[] = {'\n', '\n', '\n'};
+  this->write_array(FEED, sizeof(FEED));
+  this->printing_until_ = millis() + 750 + static_cast<uint32_t>(text.size()) * 4;
+  this->printing_ = true;
+  this->publish_status_("printing");
+}
+
+void QR701::start_barcode_print_(const std::string &text, uint8_t format, uint8_t height, uint8_t width,
+                                 bool show_text) {
+  if (text.empty() || text.size() > 252) {
+    ESP_LOGW(TAG, "Barcode data must contain 1 to 252 bytes; refusing to print %u bytes",
+             static_cast<unsigned>(text.size()));
+    this->publish_status_("error");
+    return;
+  }
+  if (width < 2 || width > 6) {
+    ESP_LOGW(TAG, "Barcode width must be from 2 to 6");
+    this->publish_status_("error");
+    return;
+  }
+
+  // GS H/h/w configure HRI text, barcode height, and narrow-bar width.
+  this->write_byte(0x1D);
+  this->write_byte(0x48);
+  this->write_byte(show_text ? 2 : 0);  // HRI below the bars, or hidden.
+  this->write_byte(0x1D);
+  this->write_byte(0x68);
+  this->write_byte(height);
+  this->write_byte(0x1D);
+  this->write_byte(0x77);
+  this->write_byte(width);
+  this->write_byte(0x1B);
+  this->write_byte(0x61);
+  this->write_byte(1);  // Centre the symbol.
+
+  this->write_byte(0x1D);
+  this->write_byte(0x6B);
+  this->write_byte(format);
+  if (format >= 65) {
+    // GS k m n d1...dn (Function B). Prefix Code 128 data with Code Set B
+    // unless the caller deliberately supplies an ESC/POS code-set selector.
+    const bool has_code_set = format == 73 && text.size() >= 2 && text[0] == '{' &&
+                              (text[1] == 'A' || text[1] == 'B' || text[1] == 'C');
+    const uint8_t prefix_length = format == 73 && !has_code_set ? 2 : 0;
+    const uint8_t length = static_cast<uint8_t>(text.size() + prefix_length);
+    this->write_byte(length);
+    if (prefix_length != 0) {
+      this->write_byte('{');
+      this->write_byte('B');
+    }
+    this->write_array(reinterpret_cast<const uint8_t *>(text.data()), text.size());
+  } else {
+    // GS k m d1...dk NUL (Function A) for UPC/EAN, Code 39, ITF, and
+    // Codabar. The printer validates symbology-specific data itself.
+    this->write_array(reinterpret_cast<const uint8_t *>(text.data()), text.size());
+    this->write_byte(0);
+  }
+  this->write_byte('\n');
+  this->write_byte(0x1B);
+  this->write_byte(0x61);
+  this->write_byte(0);  // Restore left alignment for subsequent receipts.
+  static constexpr uint8_t FEED[] = {'\n', '\n'};
+  this->write_array(FEED, sizeof(FEED));
+  this->printing_until_ = millis() + 500 + static_cast<uint32_t>(height) * 8;
+  this->printing_ = true;
+  this->publish_status_("printing");
+}
+
+void QR701::run_queued_job_() {
+  const QueuedJob job = this->queued_job_;
+  if (job == QueuedJob::NONE)
+    return;
+  this->queued_job_ = QueuedJob::NONE;
+
+  switch (job) {
+    case QueuedJob::TEXT:
+      this->start_print_(this->queued_text_);
+      break;
+    case QueuedJob::MARKDOWN:
+      this->start_markdown_print_(this->queued_text_);
+      break;
+    case QueuedJob::FEED:
+      this->start_feed_(this->queued_feed_lines_);
+      break;
+    case QueuedJob::QR:
+      this->start_qr_print_(this->queued_text_, this->queued_qr_size_, this->queued_qr_error_correction_);
+      break;
+    case QueuedJob::BARCODE:
+      this->start_barcode_print_(this->queued_text_, this->queued_barcode_format_, this->queued_barcode_height_,
+                                 this->queued_barcode_width_, this->queued_barcode_show_text_);
+      break;
+    case QueuedJob::NONE:
+      break;
+  }
+  this->queued_text_.clear();
 }
 
 void QR701::start_markdown_print_(const std::string &markdown) {
@@ -388,19 +553,7 @@ void QR701::loop() {
       this->request_status_(this->query_ + 1);
     } else {
       this->publish_printer_status_();
-      if (this->feed_queued_) {
-        this->feed_queued_ = false;
-        this->start_feed_(this->queued_feed_lines_);
-      }
-      if (this->print_queued_) {
-        this->print_queued_ = false;
-        if (this->queued_markdown_)
-          this->start_markdown_print_(this->queued_text_);
-        else
-          this->start_print_(this->queued_text_);
-        this->queued_markdown_ = false;
-        this->queued_text_.clear();
-      }
+      this->run_queued_job_();
     }
     return;
   }
@@ -408,19 +561,7 @@ void QR701::loop() {
   if (millis() - this->query_started_at_ > 100) {
     this->awaiting_status_ = false;
     this->publish_status_("unavailable");
-    if (this->feed_queued_) {
-      this->feed_queued_ = false;
-      this->start_feed_(this->queued_feed_lines_);
-    }
-    if (this->print_queued_) {
-      this->print_queued_ = false;
-      if (this->queued_markdown_)
-        this->start_markdown_print_(this->queued_text_);
-      else
-        this->start_print_(this->queued_text_);
-      this->queued_markdown_ = false;
-      this->queued_text_.clear();
-    }
+    this->run_queued_job_();
   }
 }
 
