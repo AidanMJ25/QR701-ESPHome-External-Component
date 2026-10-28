@@ -4,6 +4,8 @@
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/button/button.h"
+#include "esphome/components/number/number.h"
+#include "esphome/components/select/select.h"
 #include "esphome/components/text/text.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -14,12 +16,18 @@ namespace esphome::qr701 {
 
 class QR701PrintText;
 class QR701QRData;
+class QR701QRSize;
+class QR701QRErrorCorrection;
 class QR701BarcodeData;
 
 class QR701 : public PollingComponent, public uart::UARTDevice {
  public:
   void set_print_text(QR701PrintText *print_text) { this->print_text_ = print_text; }
   void set_qr_data(QR701QRData *qr_data) { this->qr_data_ = qr_data; }
+  void set_qr_size(QR701QRSize *qr_size) { this->qr_size_ = qr_size; }
+  void set_qr_error_correction(QR701QRErrorCorrection *qr_error_correction) {
+    this->qr_error_correction_ = qr_error_correction;
+  }
   void set_barcode_data(QR701BarcodeData *barcode_data) { this->barcode_data_ = barcode_data; }
   void set_status_text_sensor(text_sensor::TextSensor *status) { this->status_ = status; }
   void set_paper_out_binary_sensor(binary_sensor::BinarySensor *paper_out) { this->paper_out_sensor_ = paper_out; }
@@ -91,6 +99,7 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
   void print_qr_data_field();
   void print_barcode_data_field();
 
+  void setup() override;
   void update() override;
   void loop() override;
   void dump_config() override;
@@ -128,6 +137,8 @@ class QR701 : public PollingComponent, public uart::UARTDevice {
   binary_sensor::BinarySensor *error_sensor_{nullptr};
   QR701PrintText *print_text_{nullptr};
   QR701QRData *qr_data_{nullptr};
+  QR701QRSize *qr_size_{nullptr};
+  QR701QRErrorCorrection *qr_error_correction_{nullptr};
   QR701BarcodeData *barcode_data_{nullptr};
   uint8_t query_{0};
   uint32_t query_started_at_{0};
@@ -159,6 +170,19 @@ class QR701PrintText : public text::Text {
 class QR701QRData : public text::Text {
  protected:
   void control(const std::string &value) override { this->publish_state(value); }
+};
+
+class QR701QRSize : public number::Number {
+ protected:
+  void control(float value) override { this->publish_state(value); }
+};
+
+class QR701QRErrorCorrection : public select::Select {
+ protected:
+  void control(const std::string &value) override {
+    if (value == "L" || value == "M" || value == "Q" || value == "H")
+      this->publish_state(value);
+  }
 };
 
 class QR701BarcodeData : public text::Text {

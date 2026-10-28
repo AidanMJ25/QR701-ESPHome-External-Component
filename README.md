@@ -203,9 +203,11 @@ on_...:
         error_correction: M
 ```
 
-The component also creates `QR Data` and `Print QR` Home Assistant entities
-from its id. Set the text entity to a URL or other payload, then press the
-button; it uses `size: 5` and `error_correction: M`. Set `qr_data` or
+The component also creates four Home Assistant QR entities from its id:
+`QR Data`, `QR Size`, `QR Error Correction`, and `Print QR`. Set the text
+entity to a URL or other payload, choose a module size and `L`, `M`, `Q`, or
+`H` correction, then press the button. Their defaults are size `5` and
+correction `M`. Set `qr_data`, `qr_size`, `qr_error_correction`, or
 `print_qr_button` under `qr701:` to override their generated labels or entity
 settings.
 

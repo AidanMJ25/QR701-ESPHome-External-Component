@@ -265,9 +265,21 @@ void QR701::print_qr_data_field() {
     ESP_LOGW(TAG, "Print QR button pressed without a QR data entity");
     return;
   }
-  // The button's defaults deliberately produce a medium-density QR code that
-  // remains readable on 58 mm paper. Use qr701.print_qr to tune these values.
-  this->print_qr(this->qr_data_->state, 5, 49);  // 49 = ESC/POS error correction M.
+  uint8_t size = 5;
+  if (this->qr_size_ != nullptr && this->qr_size_->has_state())
+    size = static_cast<uint8_t>(this->qr_size_->state);
+
+  uint8_t error_correction = 49;  // ESC/POS M.
+  if (this->qr_error_correction_ != nullptr) {
+    const StringRef selected = this->qr_error_correction_->current_option();
+    if (selected == "L")
+      error_correction = 48;
+    else if (selected == "Q")
+      error_correction = 50;
+    else if (selected == "H")
+      error_correction = 51;
+  }
+  this->print_qr(this->qr_data_->state, size, error_correction);
 }
 
 void QR701::print_barcode_data_field() {
@@ -523,6 +535,15 @@ void QR701::start_markdown_print_(const std::string &markdown) {
   this->printing_until_ = millis() + 250 + line_count * 100;
   this->printing_ = true;
   this->publish_status_("printing");
+}
+
+void QR701::setup() {
+  // Number and select entities are not Components, so the parent provides
+  // their useful defaults when ESPHome starts.
+  if (this->qr_size_ != nullptr)
+    this->qr_size_->publish_state(5);
+  if (this->qr_error_correction_ != nullptr)
+    this->qr_error_correction_->publish_state("M");
 }
 
 void QR701::update() {
